@@ -1,0 +1,305 @@
+<html>
+<head>
+	<title>Smartphone Controller Game</title>
+	<script src="/socket.io/socket.io.js"></script>
+	<script src="//davidshimjs.github.com/qrcodejs/qrcode.min.js"></script>
+	<script src="//threejs.org/build/three.min.js"></script>
+	<style>
+		body{
+			margin: 0;
+		}
+		#QR_code{
+			position: absolute;
+			top: 0;
+			padding: 20px;
+			background: white;
+		}
+	</style>
+</head>
+<body></body>
+<script>
+
+var ip = 'x.x.x.x', // Your ip
+		port = ':8080',
+		io = io.connect(),
+		current_url = window.location.href;
+
+io.on('connect', function() {
+
+	// Game setup
+	var game = function(ip){
+
+		var QR_code_element,
+		create_QR = function(){
+
+			var QR_code,
+					url = "http://" + ip + port + "?id=" + io.id;
+
+			// Create the container for the QR code to be created in
+			QR_code_element = document.createElement('div');
+
+			// Assign an id to the element
+			QR_code_element.id = "QR_code";
+
+			// Append QR code element to the body
+			document.body.appendChild(QR_code_element);
+
+			// Assign the actual DOM element
+			QR_code_element = document.getElementById('QR_code');
+
+			// Create a QRCode
+			QR_code = new QRCode("QR_code");
+			QR_code.makeCode(url);
+		},
+		game_connected = function(){
+
+			create_QR();
+
+			io.removeListener('game_connected', game_connected);
+		},
+
+		renderer = new THREE.WebGLRenderer({
+			antialias: true
+		}),
+		scene = new THREE.Scene(),
+		camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 10000),
+
+		// Lights
+		ambient_light 		= new THREE.AmbientLight(0x222222),
+		directional_light = new THREE.DirectionalLight(0xffffff, 1),
+
+		// Used to load JSON models
+		loader = new THREE.JSONLoader(),
+
+		// Floor mesh
+		floor = new THREE.Mesh(new THREE.PlaneBufferGeometry(300,300), new THREE.MeshLambertMaterial({color: 0x22FF11})),
+
+		// Render loop
+		render = function(){
+
+			// Render using scene and camera
+			renderer.render(scene, camera);
+
+			if(car){
+
+				// Rotate car
+				if(controller_state.steer){
+
+					// Gives a number ranging from 0 to 1
+					var percentage_speed = (speed / 2);
+
+					// Rotate the car using the steer value
+					// Multiplying it by the percentage speed makes the car not turn
+					// unless accelerating and turns quicker as the speed increases.
+					car.rotateY(controller_state.steer * percentage_speed);
+				}
+
+				// If controller is accelerating
+				if(controller_state.accelerate){
+
+					// Add to speed until it is 2
+					if(speed < 2){
+						speed += 0.05;
+					}else{
+						speed = 2;
+					}
+
+				// If controller is not accelerating
+				}else{
+
+					// Subtract from speed until 0
+					if(0 < speed){
+						speed -= 0.05;
+					}else{
+						speed = 0;
+					}
+				}
+
+				// Move car "forward" at speed
+				car.translateZ(speed);
+
+				// Collisions
+				if(car.position.x > 150){
+					car.position.x = 150;
+				}
+				if(car.position.x < -150){
+					car.position.x = -150;
+				}
+				if(car.position.z > 150){
+					car.position.z = 150;
+				}
+				if(car.position.z < -150){
+					car.position.z = -150;
+				}
+			}
+
+			// Call self
+			requestAnimationFrame(render);
+		},
+		car,
+		speed = 0,
+		controller_state = {};
+
+		// Enable shadows
+		renderer.shadowMapEnabled = true;
+
+		// Moves the camera "backward" (z) and "up" (y)
+		camera.position.z = -300;
+		camera.position.y = 100;
+
+		// Points the camera at the center of the floor
+		camera.lookAt(floor.position);
+
+		// Moves the directional light
+		directional_light.position.y = 150; // "up" / "down"
+		directional_light.position.x = -100; // "left" / "right"
+		directional_light.position.z = 60; // "forward" / "backward"
+
+		// Make the light able to cast shadows
+		directional_light.castShadow = true;
+
+		// Rotates the floor 90 degrees, so that it is horizontal
+		floor.rotation.x = -90 * (Math.PI / 180)
+
+		// Make the floor able to recieve shadows
+		floor.receiveShadow = true;
+
+		// Load the car model
+		loader.load(
+			'public/car.js',
+
+			function ( geometry, materials ) {
+
+				// Create the mesh from loaded geometry and materials
+				var material = new THREE.MeshFaceMaterial( materials );
+				car = new THREE.Mesh( geometry, material );
+
+				// Can cast shadows
+				car.castShadow = true;
+
+				// Add to the scene
+				scene.add( car );
+			}
+		)
+
+		// Add camera, lights and floor to the scene
+		scene.add(camera);
+		scene.add(ambient_light);
+		scene.add(directional_light);
+		scene.add(floor);
+
+		// Set size of renderer using window dimensions
+		renderer.setSize(window.innerWidth, window.innerHeight);
+
+		// Append to DOM
+		document.body.appendChild(renderer.domElement);
+
+		// This sets off the render loop
+		render();
+
+		// Tell the server that the client is connecting as a game
+		io.emit('game_connect');
+
+		// When the server has registered this client as a game
+		// Create a QR code which will be a url with this game id as a parameter
+		io.on('game_connected', game_connected);
+
+		// When a controller has connected/disconnected to this game
+		io.on('controller_connected', function(connected){
+
+			if(connected){
+
+				// Hide the QR code
+				QR_code_element.style.display = "none";
+
+			}else{
+
+				// Show the QR code
+				QR_code_element.style.display = "block";
+
+				controller_state = {};
+
+			}
+
+		})
+
+		// When the server sends a changed controller state update it in the game
+		io.on('controller_state_change', function(state){
+
+			controller_state = state;
+
+		});
+
+	},
+
+	// Controller set up
+	controller = function(game_id){
+
+		// Tell the server this client is connecting as a controller
+		// sending the id of the game to connect to
+		io.emit('controller_connect', game_id);
+
+		// Server will send back a connected boolean
+		io.on('controller_connected', function(connected){
+
+			if(connected){
+
+				// Successful connection
+				alert("Connected!");
+
+				var controller_state = {
+					accelerate: false,
+					steer: 0
+				},
+				emit_updates = function(){
+					io.emit('controller_state_change', controller_state);
+				}
+				touchstart = function(e){
+					e.preventDefault();
+
+					controller_state.accelerate = true;
+					emit_updates();
+				},
+				touchend = function(e){
+					e.preventDefault();
+
+					controller_state.accelerate = false;
+					emit_updates();
+				},
+				devicemotion = function(e){
+					controller_state.steer = e.accelerationIncludingGravity.y / 100;
+
+					emit_updates();
+				}
+
+				document.body.addEventListener('touchstart', touchstart, false); // iOS & Android
+				document.body.addEventListener('MSPointerDown', touchstart, false); // Windows Phone
+				document.body.addEventListener('touchend', touchend, false); // iOS & Android
+				document.body.addEventListener('MSPointerUp', touchend, false); // Windows Phone
+				window.addEventListener('devicemotion', devicemotion, false);
+
+			}else{
+
+				// Failed connection
+				alert("Not connected!");
+			}
+		});
+
+	}
+
+	// If the url has an id in it
+	if(current_url.indexOf('?id=') > 0){
+
+		// Set up the controller using the game id in the url
+		controller(current_url.split('?id=')[1])
+
+	}else{
+
+		// Set up the game using ip
+		game(ip);
+
+	}
+});
+
+</script>
+</html>
